@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Handwriting & Plotter SVG Generator</title>
+    <script src="https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.min.js"></script>
+    <style>
+        :root {
+            --bg: #1e1e2e; --panel: #282a36; --text: #f8f8f2;
+            --accent: #bd93f9; --canvas: #ffffff; --border: #44475a;
+            --highlight: #50fa7b;
+        }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; height: 100vh; display: flex; overflow: hidden; }
+        #sidebar { width: 420px; background-color: var(--panel); padding: 20px; box-shadow: 2px 0 10px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 15px; overflow-y: auto; }
+        h2 { margin-top: 0; color: var(--accent); font-size: 1.5rem; margin-bottom: 5px; }
+        
+        .control-group { display: flex; flex-direction: column; gap: 5px; background: #323443; padding: 10px; border-radius: 8px; margin-bottom: 10px; }
+        .row { display: flex; justify-content: space-between; align-items: center; }
+        label { font-size: 0.85rem; font-weight: bold; color: #ffb86c; }
+        .val-display { font-weight: normal; color: #8be9fd; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        textarea, select, input[type="number"] { padding: 8px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg); color: var(--text); box-sizing: border-box; font-family: monospace; }
+        select { flex-grow: 1; }
+        textarea { width: 100%; resize: vertical; }
+        
+        #textBlocksList { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+        .text-block-card { background: #44475a; padding: 10px; border-radius: 6px; display: flex; flex-direction: column; gap: 8px; border-left: 4px solid transparent; cursor: pointer; transition: border-color 0.2s; }
+        .text-block-card:hover { border-color: #6272a4; }
+        .text-block-card.active { border-color: var(--highlight); background: #3b3e4f; }
+        .coord-inputs { display: flex; gap: 10px; align-items: center; }
+        .coord-inputs label { display: flex; align-items: center; gap: 5px; color: #f8f8f2; }
+        .coord-inputs input { width: 70px; padding: 4px; }
+        
+        .btn-small { background: var(--highlight); color: #282a36; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: bold; }
+        .btn-danger { background: #ff5555; color: #fff; }
+        .btn-large { background-color: var(--accent); color: #000; border: none; padding: 12px; border-radius: 5px; font-weight: bold; cursor: pointer; font-size: 1rem; margin-top: auto; }
+        .btn-secondary { background-color: #6272a4; color: #fff; border: none; padding: 8px; border-radius: 5px; font-size: 0.8rem; cursor: pointer; font-weight: bold; width: 100%; margin-top: 5px; }
+        
+        #propertiesPanel { display: none; flex-direction: column; gap: 5px; animation: fadeIn 0.2s; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        .toggles-group { display: flex; gap: 15px; font-size: 0.85rem; align-items: center; background: #44475a; padding: 8px; border-radius: 5px; margin-bottom: 5px; }
+        
+        #canvas-container { flex-grow: 1; padding: 40px; display: flex; justify-content: center; align-items: center; background-color: #12121c; position: relative; }
+        svg { background-color: var(--canvas); box-shadow: 0 10px 30px rgba(0,0,0,0.5); max-width: 100%; max-height: 100%; }
+        
+        /* Drag UI Feedback */
+        .text-block-group { cursor: move; }
+        .hitbox { fill: transparent; stroke: transparent; transition: stroke 0.2s; }
+        .text-block-group:hover .hitbox { stroke: rgba(189, 147, 249, 0.5); stroke-width: 2; stroke-dasharray: 4; }
+        .text-block-group.selected .hitbox { stroke: var(--highlight); stroke-width: 2; stroke-dasharray: none; }
+        
+        #boxDimensions { color: var(--highlight); font-family: monospace; font-size: 0.8rem; text-align: right; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+    <div id="sidebar">
+        <h2>Plotter Controls</h2>
+        
+        <div class="control-group">
+            <div class="row">
+                <label>Text Blocks</label>
+                <button class="btn-small" id="addBlockBtn">+ Add Box</button>
+            </div>
+            <div id="textBlocksList"></div>
+        </div>
+
+        <div id="propertiesPanel">
+            <h3 style="margin: 5px 0; color: #f8f8f2; font-size: 1.1rem;">Selected Box Properties</h3>
+            <div id="boxDimensions">Width: 0px | Height: 0px</div>
+
+            <div class="control-group">
+                <div class="row"><label>Typeface / Font</label></div>
+                <div style="display: flex; gap: 10px;">
+                    <select id="fontSelect" onchange="updateProp('font', this.value)">
+                        <option value="default">Standard Handwriting</option>
+                        <option value="blocky">Architect Block</option>
+                    </select>
+                </div>
+                <button class="btn-secondary" id="loadFontBtn">📥 Manually Upload Font</button>
+                <input type="file" id="fontLoader" accept=".json,.ttf,.otf" style="display:none;">
+            </div>
+
+            <div class="toggles-group">
+                <label><input type="checkbox" id="underline" onchange="updateProp('underline', this.checked)"> Underline</label>
+                <label><input type="checkbox" id="strikethrough" onchange="updateProp('strikethrough', this.checked)"> Strike</label>
+                <label><input type="checkbox" id="italicsCheck" onchange="updateProp('italics', this.checked)"> Italics</label>
+            </div>
+
+            <div class="control-group">
+                <div class="row"><label>Rotation</label><span class="val-display" id="rotationVal">0°</span></div>
+                <input type="range" id="rotation" min="0" max="360" value="0" oninput="updateProp('rotation', this.value)">
+            </div>
+
+            <div class="control-group">
+                <div class="row"><label>Size (Scale)</label><span class="val-display" id="sizeVal">1.0</span></div>
+                <input type="range" id="size" min="0.1" max="15" step="0.1" value="1.0" oninput="updateProp('size', this.value)">
+            </div>
+
+            <div class="control-group">
+                <div class="row"><label>Letter Spacing</label><span class="val-display" id="letterSpacingVal">5</span></div>
+                <input type="range" id="letterSpacing" min="-10" max="30" value="5" oninput="updateProp('letterSpacing', this.value)">
+            </div>
+
+            <div class="control-group">
+                <div class="row"><label>Word Spacing</label><span class="val-display" id="wordSpacingVal">20</span></div>
+                <input type="range" id="wordSpacing" min="5" max="60" value="20" oninput="updateProp('wordSpacing', this.value)">
+            </div>
+
+            <div class="control-group">
+                <div class="row"><label>Line Height</label><span class="val-display" id="lineHeightVal">40</span></div>
+                <input type="range" id="lineHeight" min="20" max="100" value="40" oninput="updateProp('lineHeight', this.value)">
+            </div>
+
+            <div class="control-group">
+                <div class="row"><label>Handwriting Randomness</label><span class="val-display" id="randomVal">0</span></div>
+                <input type="range" id="randomness" min="0" max="10" step="0.5" value="0" oninput="updateProp('randomness', this.value)">
+            </div>
+
+            <div class="control-group">
+                <div class="row"><label>Baseline Wobble (Y)</label><span class="val-display" id="wobbleVal">0</span></div>
+                <input type="range" id="wobble" min="0" max="15" step="0.5" value="0" oninput="updateProp('wobble', this.value)">
+            </div>
+
+            <div class="control-group">
+                <div class="row"><label>Italics Angle</label><span class="val-display" id="slantVal">0°</span></div>
+                <input type="range" id="slant" min="-45" max="45" value="0" oninput="updateProp('slant', this.value)">
+            </div>
+        </div>
+        
+        <div id="noSelectionMsg" style="color: #6272a4; font-size: 0.9rem; text-align: center; margin-top: 20px;">
+            Select a text box on the canvas to edit its properties.
+        </div>
+
+        <button class="btn-large" id="exportBtn">Download SVG</button>
+    </div>
+
+    <div id="canvas-container">
+        <svg id="plotterCanvas" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1100 850"></svg>
+    </div>
+
+    <script>
+        // ==========================================
+        // GITHUB PORTFOLIO AUTO-LOAD FONTS
+        // ==========================================
+        // These fonts will automatically load from your /fonts/ directory on page load.
+        const hostedFonts = [
+            { name: "Quickly Replaced", url: "./fonts/QuicklyReplacedSingleLine-rgZXL.ttf", type: "ttf" },
+            { name: "Partly Notes", url: "./fonts/PartlyNotesSingleLine-WyDMz.ttf", type: "ttf" },
+            { name: "Hefty Reward", url: "./fonts/HeftyRewardSingleLine-JRqWx.ttf", type: "ttf" },
+            { name: "Headstay", url: "./fonts/HeadstayRegular-1GrM2.ttf", type: "ttf" },
+            { name: "Gloomy Unseen", url: "./fonts/GloomyUnseenSingleLine-lg37Z.ttf", type: "ttf" },
+            { name: "Flighty", url: "./fonts/FlightyRegular-vm7zA.ttf", type: "ttf" },
+            { name: "Backstay", url: "./fonts/BackstaySingleLine-rgOw8.ttf", type: "ttf" },
+            { name: "Auditory Perception", url: "./fonts/AuditoryPerceptionSingleLine-RpELl.ttf", type: "ttf" },
+            { name: "Aplenty", url: "./fonts/AplentyRegular-owWJq.ttf", type: "ttf" }
+        ];
+
+        async function loadHostedFonts() {
+            for (const fontInfo of hostedFonts) {
+                try {
+                    const response = await fetch(fontInfo.url);
+                    if (!response.ok) throw new Error("Could not fetch " + fontInfo.url);
+                    
+                    if (fontInfo.type === 'json') {
+                        const fontData = await response.json();
+                        const fontId = 'hosted_' + Date.now() + Math.random();
+                        fonts[fontId] = {
+                            characters: fontData.characters,
+                            fallback: fontData.fallback || fonts.default.fallback
+                        };
+                        addFontToDropdown(fontId, fontInfo.name || fontData.name);
+                    } else if (fontInfo.type === 'ttf' || fontInfo.type === 'otf') {
+                        const buffer = await response.arrayBuffer();
+                        const otFont = opentype.parse(buffer);
+                        const fontId = 'hosted_' + Date.now() + Math.random();
+                        const convertedData = { characters: {}, fallback: fonts.default.fallback };
+                        
+                        for (let i = 32; i <= 126; i++) {
+                            const char = String.fromCharCode(i);
+                            const glyph = otFont.charToGlyph(char);
+                            const path = glyph.getPath(0, 20, 20);
+                            convertedData.characters[char] = { 
+                                path: path.toPathData(3), 
+                                width: glyph.advanceWidth * (20 / otFont.unitsPerEm) 
+                            };
+                        }
+                        fonts[fontId] = convertedData;
+                        addFontToDropdown(fontId, fontInfo.name || otFont.names.fontFamily.en);
+                    }
+                } catch (err) {
+                    console.error("Error auto-loading font:", fontInfo.name, err);
+                }
+            }
+        }
+        // ==========================================
+
+        function createDefaultBlock(id, y) {
+            return { 
+                id: id, text: id === 1 ? "Dear the people of Outer Space,\nWhat is going on?" : "New Text Box", 
+                x: 50, y: y, align: "left", font: "default", rotation: 0,
+                size: 1.0, letterSpacing: 5, wordSpacing: 20, lineHeight: 40,
+                randomness: 0, wobble: 0, slant: 0, underline: false, strikethrough: false, italics: false,
+                _width: 0, _height: 0
+            };
+        }
+
+        let blockIdCounter = 2;
+        let textBlocks = [createDefaultBlock(1, 100)];
+        let selectedBlockId = null;
+
+        // Shared baseline numbers/symbols
+        const sharedSymbols = {
+            '0': {path: "M6,20 C-2,20 -2,0 6,0 C14,0 14,20 6,20 M10,4 L2,16", width: 14}, '1': {path: "M2,4 L6,0 L6,20", width: 10},
+            '2': {path: "M0,6 C0,0 12,0 12,6 C12,14 0,14 0,20 L12,20", width: 14}, '3': {path: "M0,2 C0,0 12,0 12,4 C12,10 6,10 6,10 C12,10 12,20 0,18", width: 14},
+            '4': {path: "M10,20 L10,0 L0,14 L14,14", width: 16}, '5': {path: "M12,0 L0,0 L0,8 C8,6 14,10 12,18 C10,20 0,20 0,16", width: 14},
+            '6': {path: "M12,2 C6,0 0,4 0,12 C0,20 12,20 12,14 C12,6 0,6 0,12", width: 14}, '7': {path: "M0,0 L12,0 L4,20", width: 14},
+            '8': {path: "M6,10 C14,10 14,0 6,0 C-2,0 -2,10 6,10 C14,10 14,20 6,20 C-2,20 -2,10 6,10", width: 14}, '9': {path: "M0,18 C6,20 12,16 12,8 C12,0 0,0 0,6 C0,14 12,14 12,8", width: 14},
+            '!': {path: "M4,0 L4,14 M4,18 L4,20", width: 10}, '?': {path: "M2,6 C2,0 10,0 10,6 C10,12 6,12 6,16 M6,19 L6,21", width: 12},
+            ',': {path: "M4,18 C4,20 0,24 0,26", width: 10}, '.': {path: "M4,18 L4,20", width: 10},
+            '-': {path: "M0,10 L10,10", width: 12}, '\'': {path: "M4,4 L4,8", width: 8},
+            '"': {path: "M2,4 L2,8 M8,4 L8,8", width: 12}, ' ': {path: "", width: 10}
+        };
+
+        const fonts = {
+            default: {
+                characters: { ...sharedSymbols,
+                    'A': {path: "M0,20 L8,0 L16,20 M4,12 L12,12", width: 18}, 'B': {path: "M0,0 L0,20 L8,20 C14,20 14,10 8,10 C14,10 14,0 8,0 L0,0 M0,10 L8,10", width: 16},
+                    'C': {path: "M14,4 C6,0 -4,6 4,16 C8,20 12,20 16,16", width: 18}, 'D': {path: "M0,0 L0,20 L6,20 C16,20 16,0 6,0 L0,0", width: 18},
+                    'E': {path: "M12,0 L0,0 L0,20 L12,20 M0,10 L8,10", width: 14}, 'F': {path: "M12,0 L0,0 L0,20 M0,10 L8,10", width: 14},
+                    'G': {path: "M14,4 C6,0 -4,6 4,16 C10,20 16,16 16,10 L10,10", width: 18}, 'H': {path: "M0,0 L0,20 M14,0 L14,20 M0,10 L14,10", width: 16},
+                    'I': {path: "M0,0 L8,0 M4,0 L4,20 M0,20 L8,20", width: 10}, 'J': {path: "M12,0 L12,14 C12,20 0,20 0,14", width: 14},
+                    'K': {path: "M0,0 L0,20 M12,0 L0,10 L12,20", width: 14}, 'L': {path: "M0,0 L0,20 L12,20", width: 14},
+                    'M': {path: "M0,20 L0,0 L8,10 L16,0 L16,20", width: 18}, 'N': {path: "M0,20 L0,0 L14,20 L14,0", width: 16},
+                    'O': {path: "M8,20 C-4,20 -4,0 8,0 C20,0 20,20 8,20", width: 18}, 'P': {path: "M0,20 L0,0 L8,0 C16,0 16,10 8,10 L0,10", width: 16},
+                    'Q': {path: "M8,20 C-4,20 -4,0 8,0 C20,0 20,20 8,20 M10,14 L16,20", width: 18}, 'R': {path: "M0,20 L0,0 L8,0 C16,0 16,10 8,10 L0,10 M6,10 L14,20", width: 16},
+                    'S': {path: "M14,4 C10,0 0,0 0,4 C0,10 14,10 14,16 C14,20 0,20 -2,16", width: 16}, 'T': {path: "M0,0 L14,0 M7,0 L7,20", width: 16},
+                    'U': {path: "M0,0 L0,14 C0,20 14,20 14,14 L14,0", width: 16}, 'V': {path: "M0,0 L7,20 L14,0", width: 16},
+                    'W': {path: "M0,0 L4,20 L8,10 L12,20 L16,0", width: 18}, 'X': {path: "M0,0 L14,20 M14,0 L0,20", width: 16},
+                    'Y': {path: "M0,0 L7,10 L14,0 M7,10 L7,20", width: 16}, 'Z': {path: "M0,0 L14,0 L0,20 L14,20", width: 16},
+                    
+                    'a': {path: "M12,20 L12,10 C4,10 0,12 0,15 C0,18 4,20 12,20", width: 14}, 'b': {path: "M0,0 L0,20 C12,20 12,10 0,10", width: 14},
+                    'c': {path: "M12,12 C8,10 0,10 0,15 C0,20 8,20 12,18", width: 14}, 'd': {path: "M12,0 L12,20 C0,20 0,10 12,10", width: 14},
+                    'e': {path: "M0,15 L12,15 C12,10 8,10 6,10 C0,10 0,20 6,20 C10,20 12,18 12,18", width: 14}, 'f': {path: "M10,0 C4,0 4,6 4,20 M0,8 L10,8", width: 12},
+                    'g': {path: "M12,10 C0,10 0,20 12,20 L12,10 L12,26 C12,32 0,32 0,28", width: 14}, 'h': {path: "M0,0 L0,20 M0,10 C6,10 12,10 12,20", width: 14},
+                    'i': {path: "M4,8 L4,20 M4,0 L4,2", width: 10}, 'j': {path: "M8,8 L8,26 C8,32 -4,32 -4,26 M8,0 L8,2", width: 12},
+                    'k': {path: "M0,0 L0,20 M10,10 L0,14 L10,20", width: 12}, 'l': {path: "M2,0 L2,20", width: 6},
+                    'm': {path: "M0,10 L0,20 M0,10 C4,10 8,10 8,20 M8,10 C12,10 16,10 16,20", width: 18}, 'n': {path: "M0,10 L0,20 M0,10 C6,10 12,10 12,20", width: 14},
+                    'o': {path: "M6,20 C0,20 0,10 6,10 C12,10 12,20 6,20", width: 14}, 'p': {path: "M0,10 L0,30 M0,10 C12,10 12,20 0,20", width: 14},
+                    'q': {path: "M12,10 L12,30 M12,10 C0,10 0,20 12,20", width: 14}, 'r': {path: "M0,10 L0,20 M0,14 C4,8 10,8 12,10", width: 14},
+                    's': {path: "M12,12 C8,10 4,10 4,13 C4,16 12,15 12,17 C12,20 8,20 0,18", width: 14}, 't': {path: "M4,2 L4,20 C4,24 10,22 10,20 M0,8 L10,8", width: 12},
+                    'u': {path: "M0,10 L0,16 C0,20 12,20 12,16 L12,10 M12,16 L12,20", width: 14}, 'v': {path: "M0,10 L6,20 L12,10", width: 14},
+                    'w': {path: "M0,10 L4,20 L8,12 L12,20 L16,10", width: 18}, 'x': {path: "M0,10 L12,20 M12,10 L0,20", width: 14},
+                    'y': {path: "M0,10 L6,20 L12,10 M6,20 L6,28 C6,32 0,32 -2,28", width: 14}, 'z': {path: "M0,10 L12,10 L0,20 L12,20", width: 14}
+                },
+                fallback: { path: "M0,10 L10,10 M0,20 L10,20 L10,0 L0,0 Z", width: 12 }
+            },
+            
+            blocky: {
+                characters: { ...sharedSymbols,
+                    'A': {path: "M0,20 L0,0 L14,0 L14,20 M0,10 L14,10", width: 16}, 'B': {path: "M0,0 L0,20 L14,20 L14,10 L0,10 M0,0 L12,0 L12,10", width: 16},
+                    'C': {path: "M14,0 L0,0 L0,20 L14,20", width: 16}, 'D': {path: "M0,0 L0,20 L14,20 L14,0 Z", width: 16},
+                    'E': {path: "M14,0 L0,0 L0,20 L14,20 M0,10 L10,10", width: 16}, 'F': {path: "M14,0 L0,0 L0,20 M0,10 L10,10", width: 16},
+                    'G': {path: "M14,0 L0,0 L0,20 L14,20 L14,10 L6,10", width: 16}, 'H': {path: "M0,0 L0,20 M14,0 L14,20 M0,10 L14,10", width: 16},
+                    'I': {path: "M0,0 L8,0 M4,0 L4,20 M0,20 L8,20", width: 10}, 'J': {path: "M14,0 L14,20 L0,20 L0,10", width: 16},
+                    'K': {path: "M0,0 L0,20 M14,0 L0,10 L14,20", width: 16}, 'L': {path: "M0,0 L0,20 L14,20", width: 16},
+                    'M': {path: "M0,20 L0,0 L7,10 L14,0 L14,20", width: 16}, 'N': {path: "M0,20 L0,0 L14,20 L14,0", width: 16},
+                    'O': {path: "M0,0 L0,20 L14,20 L14,0 Z", width: 16}, 'P': {path: "M0,20 L0,0 L14,0 L14,10 L0,10", width: 16},
+                    'Q': {path: "M0,0 L0,20 L14,20 L14,0 Z M10,14 L16,22", width: 18}, 'R': {path: "M0,20 L0,0 L14,0 L14,10 L0,10 M6,10 L14,20", width: 16},
+                    'S': {path: "M14,0 L0,0 L0,10 L14,10 L14,20 L0,20", width: 16}, 'T': {path: "M0,0 L14,0 M7,0 L7,20", width: 16},
+                    'U': {path: "M0,0 L0,20 L14,20 L14,0", width: 16}, 'V': {path: "M0,0 L7,20 L14,0", width: 16},
+                    'W': {path: "M0,0 L4,20 L7,10 L10,20 L14,0", width: 16}, 'X': {path: "M0,0 L14,20 M14,0 L0,20", width: 16},
+                    'Y': {path: "M0,0 L7,10 L14,0 M7,10 L7,20", width: 16}, 'Z': {path: "M0,0 L14,0 L0,20 L14,20", width: 16},
+
+                    'a': {path: "M0,20 L0,10 L12,10 L12,20 M0,15 L12,15", width: 14}, 'b': {path: "M0,0 L0,20 L12,20 L12,10 L0,10", width: 14},
+                    'c': {path: "M12,10 L0,10 L0,20 L12,20", width: 14}, 'd': {path: "M12,0 L12,20 L0,20 L0,10 L12,10", width: 14},
+                    'e': {path: "M12,10 L0,10 L0,20 L12,20 M0,15 L10,15", width: 14}, 'f': {path: "M12,0 L4,0 L4,20 M0,10 L10,10", width: 14},
+                    'g': {path: "M12,10 L0,10 L0,20 L12,20 L12,28 L0,28", width: 14}, 'h': {path: "M0,0 L0,20 M0,10 L12,10 L12,20", width: 14},
+                    'i': {path: "M6,10 L6,20 M6,4 L6,6", width: 12}, 'j': {path: "M8,10 L8,28 L0,28 M8,4 L8,6", width: 12},
+                    'k': {path: "M0,0 L0,20 M12,10 L0,15 L12,20", width: 14}, 'l': {path: "M6,0 L6,20", width: 12},
+                    'm': {path: "M0,10 L0,20 M0,10 L6,10 L6,20 M6,10 L12,10 L12,20", width: 16}, 'n': {path: "M0,10 L0,20 M0,10 L12,10 L12,20", width: 14},
+                    'o': {path: "M0,10 L0,20 L12,20 L12,10 Z", width: 14}, 'p': {path: "M0,10 L0,30 M0,10 L12,10 L12,20 L0,20", width: 14},
+                    'q': {path: "M12,10 L12,30 M12,10 L0,10 L0,20 L12,20", width: 14}, 'r': {path: "M0,10 L0,20 M0,14 L12,10", width: 14},
+                    's': {path: "M12,10 L0,10 L0,15 L12,15 L12,20 L0,20", width: 14}, 't': {path: "M6,0 L6,20 M0,10 L12,10", width: 14},
+                    'u': {path: "M0,10 L0,20 L12,20 L12,10", width: 14}, 'v': {path: "M0,10 L6,20 L12,10", width: 14},
+                    'w': {path: "M0,10 L4,20 L8,14 L12,20 L16,10", width: 18}, 'x': {path: "M0,10 L12,20 M12,10 L0,20", width: 14},
+                    'y': {path: "M0,10 L6,20 L12,10 M6,20 L6,28 L0,28", width: 14}, 'z': {path: "M0,10 L12,10 L0,20 L12,20", width: 14}
+                },
+                fallback: { path: "M0,10 L10,10 M0,20 L10,20 L10,0 L0,0 Z", width: 12 }
+            }
+        };
+
+        const canvas = document.getElementById('plotterCanvas');
+        const textBlocksList = document.getElementById('textBlocksList');
+        
+        let dragTargetId = null;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+
+        function addFontToDropdown(fontId, fontName) {
+            const opt = document.createElement('option');
+            opt.value = fontId;
+            opt.innerText = fontName;
+            document.getElementById('fontSelect').appendChild(opt);
+        }
+
+        // Manual upload logic (still here so users can try fonts before uploading to github!)
+        document.getElementById('loadFontBtn').addEventListener('click', () => {
+            document.getElementById('fontLoader').click();
+        });
+
+        document.getElementById('fontLoader').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const ext = file.name.split('.').pop().toLowerCase();
+            const reader = new FileReader();
+            
+            if (ext === 'json') {
+                reader.onload = (event) => {
+                    try {
+                        const fontData = JSON.parse(event.target.result);
+                        if (!fontData.name || !fontData.characters) throw new Error("Invalid JSON");
+                        const fontId = 'manual_' + Date.now();
+                        fonts[fontId] = { characters: fontData.characters, fallback: fontData.fallback || fonts.default.fallback };
+                        addFontToDropdown(fontId, fontData.name);
+                        
+                        if (selectedBlockId !== null) {
+                            document.getElementById('fontSelect').value = fontId;
+                            updateProp('font', fontId);
+                        }
+                    } catch (err) {
+                        alert("Error loading JSON font.");
+                    }
+                    e.target.value = ''; 
+                };
+                reader.readAsText(file);
+            } 
+            else if (ext === 'ttf' || ext === 'otf') {
+                reader.onload = (event) => {
+                    try {
+                        const buffer = event.target.result;
+                        const otFont = opentype.parse(buffer);
+                        const fontId = 'manual_' + Date.now();
+                        const fontName = otFont.names.fontFamily ? otFont.names.fontFamily.en : file.name;
+                        
+                        const convertedData = { characters: {}, fallback: fonts.default.fallback };
+                        for (let i = 32; i <= 126; i++) {
+                            const char = String.fromCharCode(i);
+                            const glyph = otFont.charToGlyph(char);
+                            const path = glyph.getPath(0, 20, 20);
+                            convertedData.characters[char] = { path: path.toPathData(3), width: glyph.advanceWidth * (20 / otFont.unitsPerEm) };
+                        }
+                        
+                        fonts[fontId] = convertedData;
+                        addFontToDropdown(fontId, fontName);
+                        
+                        if (selectedBlockId !== null) {
+                            document.getElementById('fontSelect').value = fontId;
+                            updateProp('font', fontId);
+                        }
+                    } catch(err) {
+                        alert("Error parsing TTF/OTF font.");
+                    }
+                    e.target.value = ''; 
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        function renderTextBlocksUI() {
+            textBlocksList.innerHTML = '';
+            textBlocks.forEach((block, index) => {
+                const div = document.createElement('div');
+                div.className = `text-block-card ${block.id === selectedBlockId ? 'active' : ''}`;
+                div.onclick = (e) => {
+                    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'TEXTAREA' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'BUTTON') {
+                        selectBlock(block.id);
+                    }
+                };
+                div.innerHTML = `
+                    <div class="row">
+                        <strong>Text Box ${index + 1}</strong>
+                        ${textBlocks.length > 1 ? `<button class="btn-small btn-danger" onclick="removeBlock(${block.id})">Remove</button>` : ''}
+                    </div>
+                    <textarea rows="2" oninput="updateBlockData(${block.id}, 'text', this.value)">${block.text}</textarea>
+                    <div class="coord-inputs">
+                        <label>Align: 
+                            <select onchange="updateBlockData(${block.id}, 'align', this.value)">
+                                <option value="left" ${block.align === 'left' ? 'selected' : ''}>Left</option>
+                                <option value="center" ${block.align === 'center' ? 'selected' : ''}>Center</option>
+                                <option value="right" ${block.align === 'right' ? 'selected' : ''}>Right</option>
+                            </select>
+                        </label>
+                        <label>X: <input type="number" id="block-x-${block.id}" value="${block.x}" oninput="updateBlockData(${block.id}, 'x', this.value)"></label>
+                        <label>Y: <input type="number" id="block-y-${block.id}" value="${block.y}" oninput="updateBlockData(${block.id}, 'y', this.value)"></label>
+                    </div>
+                `;
+                textBlocksList.appendChild(div);
+            });
+        }
+
+        function updateBlockData(id, key, value) {
+            const block = textBlocks.find(b => b.id === id);
+            if (block) {
+                block[key] = (key === 'text' || key === 'align') ? value : parseFloat(value) || 0;
+                if(selectedBlockId !== id) selectBlock(id);
+                renderText();
+                updateDimensionsDisplay(block);
+            }
+        }
+
+        function updateProp(key, value) {
+            if (selectedBlockId === null) return;
+            const block = textBlocks.find(b => b.id === selectedBlockId);
+            if (block) {
+                if (key === 'font') {
+                    block[key] = value;
+                } else {
+                    block[key] = (typeof value === 'boolean') ? value : parseFloat(value);
+                }
+                
+                if (key === 'italics') {
+                    block.slant = value ? -15 : 0;
+                    document.getElementById('slant').value = block.slant;
+                    document.getElementById('slantVal').innerText = block.slant + "°";
+                }
+                if (key === 'slant') {
+                    block.italics = (value !== 0);
+                    document.getElementById('italicsCheck').checked = block.italics;
+                }
+                
+                if(document.getElementById(key + 'Val')) {
+                    let displayVal = value;
+                    if(key === 'slant' || key === 'rotation') displayVal += "°";
+                    document.getElementById(key + 'Val').innerText = displayVal;
+                }
+                
+                renderText();
+                updateDimensionsDisplay(block);
+            }
+        }
+
+        function selectBlock(id) {
+            selectedBlockId = id;
+            renderTextBlocksUI();
+            
+            if (id !== null) {
+                const block = textBlocks.find(b => b.id === id);
+                document.getElementById('propertiesPanel').style.display = 'flex';
+                document.getElementById('noSelectionMsg').style.display = 'none';
+                
+                document.getElementById('fontSelect').value = block.font;
+                ['rotation', 'size', 'letterSpacing', 'wordSpacing', 'lineHeight', 'randomness', 'wobble', 'slant'].forEach(key => {
+                    document.getElementById(key).value = block[key];
+                    let displayVal = block[key];
+                    if(key === 'slant' || key === 'rotation') displayVal += "°";
+                    document.getElementById(key + 'Val').innerText = displayVal;
+                });
+                document.getElementById('underline').checked = block.underline;
+                document.getElementById('strikethrough').checked = block.strikethrough;
+                document.getElementById('italicsCheck').checked = block.italics;
+                
+                updateDimensionsDisplay(block);
+            } else {
+                document.getElementById('propertiesPanel').style.display = 'none';
+                document.getElementById('noSelectionMsg').style.display = 'block';
+            }
+        }
+
+        function updateDimensionsDisplay(block) {
+            document.getElementById('boxDimensions').innerText = `Width: ${Math.round(block._width)}px | Height: ${Math.round(block._height)}px`;
+        }
+
+        function removeBlock(id) {
+            textBlocks = textBlocks.filter(b => b.id !== id);
+            if (selectedBlockId === id) {
+                const nextId = textBlocks.length > 0 ? textBlocks[0].id : null;
+                renderText();
+                selectBlock(nextId);
+            } else { 
+                renderTextBlocksUI(); 
+                renderText(); 
+            }
+        }
+
+        document.getElementById('addBlockBtn').addEventListener('click', () => {
+            const newBlock = createDefaultBlock(blockIdCounter++, 300);
+            textBlocks.push(newBlock);
+            renderText(); 
+            selectBlock(newBlock.id);
+        });
+
+        function renderText() {
+            canvas.innerHTML = ''; 
+
+            textBlocks.forEach(block => {
+                const lines = block.text.split('\n');
+                let maxBlockWidth = 0;
+                const lineMetrics = [];
+                const activeFont = fonts[block.font] || fonts.default;
+
+                lines.forEach((line) => {
+                    let lineWidth = 0;
+                    for (let i = 0; i < line.length; i++) {
+                        const char = line[i];
+                        if (char === ' ') lineWidth += block.wordSpacing;
+                        else {
+                            const charData = activeFont.characters[char] || activeFont.fallback;
+                            lineWidth += charData.width + block.letterSpacing;
+                        }
+                    }
+                    const scaledWidth = lineWidth * block.size;
+                    lineMetrics.push({ text: line, scaledWidth: scaledWidth });
+                    if (scaledWidth > maxBlockWidth) maxBlockWidth = scaledWidth;
+                });
+
+                block._width = maxBlockWidth;
+                block._height = lines.length * (block.lineHeight * block.size);
+
+                const groupEl = document.createElementNS("http://www.w3.org/2000/svg", "g");
+                groupEl.setAttribute("class", `text-block-group ${block.id === selectedBlockId ? 'selected' : ''}`);
+                groupEl.setAttribute("data-id", block.id);
+                
+                const cx = maxBlockWidth / 2;
+                const cy = block._height / 2;
+                groupEl.setAttribute("transform", `translate(${block.x}, ${block.y}) rotate(${block.rotation || 0}, ${cx}, ${cy})`);
+
+                const hitbox = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                hitbox.setAttribute("class", "hitbox");
+                hitbox.setAttribute("x", -10); 
+                hitbox.setAttribute("y", -10);
+                hitbox.setAttribute("width", maxBlockWidth + 20);
+                hitbox.setAttribute("height", block._height + 10);
+                groupEl.appendChild(hitbox);
+
+                let currentY = 0;
+
+                lineMetrics.forEach((lineData) => {
+                    let currentX = 0;
+                    if (block.align === 'center') currentX += (maxBlockWidth - lineData.scaledWidth) / 2;
+                    if (block.align === 'right') currentX += (maxBlockWidth - lineData.scaledWidth);
+
+                    if (block.underline || block.strikethrough) {
+                        const lineEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                        let paths = "";
+                        const unscaledWidth = lineData.scaledWidth / block.size;
+                        if (block.underline) paths += `M0,22 L${unscaledWidth},22 `; 
+                        if (block.strikethrough) paths += `M0,10 L${unscaledWidth},10 `;
+                        
+                        lineEl.setAttribute("d", paths);
+                        lineEl.setAttribute("stroke", "#000");
+                        lineEl.setAttribute("stroke-width", 2 / block.size);
+                        lineEl.setAttribute("fill", "none");
+                        lineEl.setAttribute("transform", `translate(${currentX}, ${currentY}) scale(${block.size}) skewX(${block.slant})`); 
+                        groupEl.appendChild(lineEl);
+                    }
+
+                    for (let i = 0; i < lineData.text.length; i++) {
+                        const char = lineData.text[i];
+                        if (char === ' ') {
+                            currentX += block.wordSpacing * block.size;
+                            continue;
+                        }
+
+                        const charData = activeFont.characters[char] || activeFont.fallback;
+                        const wobbleY = block.wobble > 0 ? (Math.random() * block.wobble) - (block.wobble / 2) : 0;
+                        
+                        let randScale = 1;
+                        let randRotate = 0;
+                        if (block.randomness > 0) {
+                            randScale += ((Math.random() * 0.04 * block.randomness) - (0.02 * block.randomness));
+                            randRotate = (Math.random() * block.randomness) - (block.randomness / 2); 
+                        }
+
+                        if (charData.path !== "") {
+                            const pathEl = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                            pathEl.setAttribute("d", charData.path);
+                            pathEl.setAttribute("stroke", "#000000");
+                            pathEl.setAttribute("stroke-width", 2 / block.size);
+                            pathEl.setAttribute("fill", "none");
+                            pathEl.setAttribute("stroke-linecap", "round");
+                            pathEl.setAttribute("stroke-linejoin", "round");
+
+                            pathEl.setAttribute("transform", 
+                                `translate(${currentX}, ${currentY + wobbleY}) 
+                                 scale(${block.size * randScale}) 
+                                 skewX(${block.slant})
+                                 rotate(${randRotate})`
+                            );
+                            groupEl.appendChild(pathEl);
+                        }
+                        
+                        let xAdvance = (charData.width + block.letterSpacing) * block.size;
+                        if (block.randomness > 0) xAdvance += (Math.random() * block.randomness * 0.5) - (block.randomness * 0.25);
+                        currentX += xAdvance;
+                    }
+                    currentY += block.lineHeight * block.size;
+                });
+                
+                canvas.appendChild(groupEl);
+            });
+        }
+
+        function getMousePosition(evt) {
+            const pt = canvas.createSVGPoint();
+            pt.x = evt.clientX;
+            pt.y = evt.clientY;
+            return pt.matrixTransform(canvas.getScreenCTM().inverse());
+        }
+
+        canvas.addEventListener('mousedown', (e) => {
+            const group = e.target.closest('.text-block-group');
+            if (group) {
+                const id = parseInt(group.getAttribute('data-id'));
+                if (selectedBlockId !== id) selectBlock(id);
+                
+                dragTargetId = id;
+                const block = textBlocks.find(b => b.id === dragTargetId);
+                const mousePos = getMousePosition(e);
+                
+                dragOffsetX = mousePos.x - block.x;
+                dragOffsetY = mousePos.y - block.y;
+            } else {
+                if (selectedBlockId !== null) {
+                    selectedBlockId = null;
+                    renderTextBlocksUI();
+                    renderText();
+                    document.getElementById('propertiesPanel').style.display = 'none';
+                    document.getElementById('noSelectionMsg').style.display = 'block';
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (dragTargetId !== null) {
+                const mousePos = getMousePosition(e);
+                const block = textBlocks.find(b => b.id === dragTargetId);
+                block.x = Math.round(mousePos.x - dragOffsetX);
+                block.y = Math.round(mousePos.y - dragOffsetY);
+                
+                const xInput = document.getElementById(`block-x-${dragTargetId}`);
+                const yInput = document.getElementById(`block-y-${dragTargetId}`);
+                if (xInput) xInput.value = block.x;
+                if (yInput) yInput.value = block.y;
+                
+                renderText();
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => { dragTargetId = null; });
+        canvas.addEventListener('mouseleave', () => { dragTargetId = null; });
+
+        document.getElementById('exportBtn').addEventListener('click', () => {
+            const exportCanvas = canvas.cloneNode(true);
+            exportCanvas.querySelectorAll('.hitbox').forEach(el => el.remove());
+            const svgData = new XMLSerializer().serializeToString(exportCanvas);
+            const blob = new Blob([svgData], {type: "image/svg+xml;charset=utf-8"});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "plotter_handwriting.svg";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        });
+
+        // Initialize and trigger auto-loading
+        loadHostedFonts().then(() => {
+            renderTextBlocksUI();
+            renderText();
+            selectBlock(1);
+        });
+    </script>
+</body>
+</html>
